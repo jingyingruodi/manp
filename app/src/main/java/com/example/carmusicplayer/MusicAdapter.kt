@@ -7,7 +7,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
 class MusicAdapter(
-    private val musicList: List<Music>,
+    private var musicList: List<Music>,
     private val onItemClick: (Music) -> Unit
 ) : RecyclerView.Adapter<MusicAdapter.MusicViewHolder>() {
 
@@ -59,6 +59,12 @@ class MusicAdapter(
 
     fun setSelectedPosition(position: Int) {
         selectedPosition = position
+        notifyDataSetChanged()
+    }
+
+    // 添加更新数据的方法
+    fun updateData(newList: List<Music>) {
+        musicList = newList
         notifyDataSetChanged()
     }
 }

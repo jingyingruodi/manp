@@ -33,9 +33,20 @@
             android:layout_weight="1"
             android:text="车载音乐播放器"
             android:textColor="#FFFFFF"
-            android:textSize="24sp"
+            android:textSize="20sp"
             android:textStyle="bold"
             android:gravity="center" />
+        <Button
+            android:id="@+id/dao_ru"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="0.3"
+            android:text="导入音乐"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center" />
+
     </LinearLayout>
 
     <!-- 主内容区域 - 横向排列 -->
@@ -56,14 +67,17 @@
             android:orientation="vertical"
             android:background="#1C1C1E">
 
+
+
             <TextView
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="播放列表"
                 android:textColor="#FFFFFF"
                 android:textSize="20sp"
                 android:textStyle="bold"
-                android:padding="16dp" />
+                android:padding="1dp" />
+
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/recyclerView"
@@ -88,7 +102,7 @@
                 android:layout_height="50dp"
                 android:src="@drawable/img_2"
                 android:contentDescription="唱片"
-                android:layout_marginTop="20dp" />
+                android:layout_marginTop="10dp" />
 
             <!-- 歌曲信息 -->
             <TextView
@@ -99,7 +113,7 @@
                 android:textColor="#FFFFFF"
                 android:textSize="22sp"
                 android:textStyle="bold"
-                android:layout_marginTop="20dp" />
+                android:layout_marginTop="10dp" />
 
             <TextView
                 android:id="@+id/tvNowPlayingArtist"
@@ -115,7 +129,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginTop="20dp"
+                android:layout_marginTop="5dp"
                 android:paddingHorizontal="20dp">
 
                 <TextView
@@ -149,7 +163,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginTop="30dp"
+                android:layout_marginTop="10dp"
                 android:gravity="center">
 
                 <ImageView
