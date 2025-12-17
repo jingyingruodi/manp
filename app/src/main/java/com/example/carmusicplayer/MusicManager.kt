@@ -6,6 +6,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
+
 object MusicManager {
     private const val PREF_NAME = "music_prefs"
     private const val IMPORTED_MUSIC_KEY = "imported_music_list"
@@ -21,9 +22,6 @@ object MusicManager {
         musicList.addAll(getImportedMusic(context))
 
         Log.d("MusicManager", "总音乐数: ${musicList.size}")
-        Log.d("MusicManager", "内置音乐: ${musicList.count { !it.isImported }}")
-        Log.d("MusicManager", "导入音乐: ${musicList.count { it.isImported }}")
-
         return musicList
     }
 
@@ -56,21 +54,21 @@ object MusicManager {
                     return@forEachIndexed
                 }
 
-                val duration = getMusicDuration(imported.filePath)
-                val title = imported.fileName.substringBeforeLast(".")
+                // 修改：使用 extractMetadataFromMedia 提取详细信息
+                val metadata = extractMetadataFromMedia(imported.filePath, imported.fileName)
 
                 importedMusic.add(
                     Music(
                         id = id++,
-                        title = title,
-                        artist = "本地导入",
-                        duration = duration,
+                        title = metadata.title,
+                        artist = metadata.artist, // 显示真实的歌手名
+                        duration = metadata.duration,
                         filePath = imported.filePath,
                         isImported = true
                     )
                 )
 
-                Log.d("MusicManager", "成功加载导入音乐: $title, 时长: ${duration}ms")
+                Log.d("MusicManager", "加载导入音乐: ${metadata.title} - ${metadata.artist}")
 
             } catch (e: Exception) {
                 Log.e("MusicManager", "加载导入音乐失败: ${imported.fileName}", e)
@@ -78,6 +76,49 @@ object MusicManager {
         }
 
         return importedMusic
+    }
+
+    // 辅助数据类
+    private data class MetadataResult(val title: String, val artist: String, val duration: Long)
+
+    // 新增：提取媒体元数据（标题、歌手、时长）
+    private fun extractMetadataFromMedia(filePath: String, defaultFileName: String): MetadataResult {
+        val retriever = MediaMetadataRetriever()
+        var title = defaultFileName.substringBeforeLast(".")
+        var artist = "未知艺术家" // 默认歌手名
+        var duration = 180000L
+
+        try {
+            retriever.setDataSource(filePath)
+            
+            // 提取标题
+            val metaTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+            if (!metaTitle.isNullOrEmpty()) {
+                title = metaTitle.trim()
+            }
+
+            // 提取歌手/艺术家
+            val metaArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            if (!metaArtist.isNullOrEmpty()) {
+                artist = metaArtist.trim()
+            }
+
+            // 提取时长
+            val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            if (durationStr != null) {
+                duration = durationStr.toLong()
+            }
+        } catch (e: Exception) {
+            Log.e("MusicManager", "元数据提取失败: $filePath", e)
+        } finally {
+            try {
+                retriever.release()
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+        
+        return MetadataResult(title, artist, duration)
     }
 
     // 保存导入的音乐信息
@@ -90,55 +131,24 @@ object MusicManager {
             )
         }
 
-        Log.d("MusicManager", "保存导入音乐数据: ${importedData.size} 条")
-        importedData.forEachIndexed { index, data ->
-            Log.d("MusicManager", "保存第${index + 1}条: ${data.fileName}, 路径: ${data.filePath}")
-        }
-
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val editor = prefs.edit()
         val json = Gson().toJson(importedData)
         editor.putString(IMPORTED_MUSIC_KEY, json)
-        val success = editor.commit() // 使用commit确保立即保存
-
-        if (success) {
-            Log.d("MusicManager", "保存成功到SharedPreferences")
-        } else {
-            Log.e("MusicManager", "保存失败到SharedPreferences")
-        }
+        editor.commit()
     }
 
-    // 新增：获取导入音乐数据（用于ImportMusicActivity）
+    // 获取导入音乐数据
     fun getImportedMusicData(context: Context): List<ImportedMusicData> {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val json = prefs.getString(IMPORTED_MUSIC_KEY, "[]")
 
         return try {
             val type = object : TypeToken<List<ImportedMusicData>>() {}.type
-            val importedList: List<ImportedMusicData> = Gson().fromJson(json, type)
-            importedList
+            Gson().fromJson(json, type)
         } catch (e: Exception) {
             Log.e("MusicManager", "解析导入音乐数据失败", e)
             emptyList()
-        }
-    }
-
-    // 获取音乐时长
-    private fun getMusicDuration(filePath: String): Long {
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(filePath)
-            val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            durationStr?.toLong() ?: 180000 // 默认3分钟
-        } catch (e: Exception) {
-            Log.e("MusicManager", "获取音乐时长失败: $filePath", e)
-            180000 // 默认3分钟
-        } finally {
-            try {
-                retriever.release()
-            } catch (e: Exception) {
-                Log.e("MusicManager", "释放MediaMetadataRetriever失败", e)
-            }
         }
     }
 
