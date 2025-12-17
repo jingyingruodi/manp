@@ -5,6 +5,8 @@ import android.content.Intent
 import android.media.MediaPlayer
 import android.os.Binder
 import android.os.IBinder
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import com.example.carmusicplayer.notification.MusicNotificationManager
 import java.io.File
@@ -14,6 +16,7 @@ class MusicService : Service() {
 
     private lateinit var mediaPlayer: MediaPlayer
     private lateinit var notificationManager: MusicNotificationManager
+    private lateinit var mediaSession: MediaSessionCompat 
     private val binder = MusicBinder()
     
     // 播放列表数据
@@ -24,7 +27,6 @@ class MusicService : Service() {
     
     // 监听器
     private var externalCompletionListener: MediaPlayer.OnCompletionListener? = null
-    // UI更新回调
     private var onMusicChangeListener: ((Music) -> Unit)? = null
     private var onPlayStateChangeListener: ((Boolean) -> Unit)? = null
 
@@ -36,9 +38,35 @@ class MusicService : Service() {
         super.onCreate()
         Log.d("MusicService", "Service创建")
         
+        // 1. 初始化 NotificationManager
         notificationManager = MusicNotificationManager(this)
+
+        // 2. 初始化 MediaSession
+        mediaSession = MediaSessionCompat(this, "MusicService").apply {
+            isActive = true
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() { resumeMusic() }
+                override fun onPause() { pauseMusic() }
+                override fun onSkipToNext() { playNext() }
+                override fun onSkipToPrevious() { playPrevious() }
+                override fun onStop() { stopMusic() }
+            })
+        }
+
+        // 3. 立即启动前台服务（关键修复：防止服务被杀）
+        // buildNotification 可能需要一个 Music 对象，这里传 null，manager 内部处理
+        try {
+            startForeground(MusicNotificationManager.NOTIFICATION_ID, 
+                notificationManager.buildNotification(null, false))
+        } catch (e: Exception) {
+            Log.e("MusicService", "启动前台服务失败", e)
+        }
+
+        // 4. 初始化播放器
         initMediaPlayer()
     }
+
+    fun getMediaSessionToken() = mediaSession.sessionToken
 
     private fun initMediaPlayer() {
         mediaPlayer = MediaPlayer()
@@ -48,10 +76,7 @@ class MusicService : Service() {
     private fun setupCompletionListener() {
         mediaPlayer.setOnCompletionListener { mp ->
             Log.d("MusicService", "音乐播放完成")
-            // 自动播放下一首
             playNext()
-            
-            // 通知外部
             externalCompletionListener?.onCompletion(mp)
         }
     }
@@ -64,36 +89,34 @@ class MusicService : Service() {
         val action = intent?.action
         Log.d("MusicService", "收到命令: $action")
         
-        when (action) {
-            MusicNotificationManager.ACTION_PLAY -> resumeMusic()
-            MusicNotificationManager.ACTION_PAUSE -> pauseMusic()
-            MusicNotificationManager.ACTION_PREV -> playPrevious()
-            MusicNotificationManager.ACTION_NEXT -> playNext()
-            MusicNotificationManager.ACTION_STOP -> stopMusic()
+        if (action != null) {
+            when (action) {
+                MusicNotificationManager.ACTION_PREV -> playPrevious()
+                MusicNotificationManager.ACTION_NEXT -> playNext()
+                MusicNotificationManager.ACTION_STOP -> stopMusic()
+                MusicNotificationManager.ACTION_PLAY_PAUSE -> {
+                    if (isPlaying) pauseMusic() else resumeMusic()
+                }
+                // 兼容旧的Action定义，防止有地方没改过来
+                "com.example.carmusicplayer.ACTION_PLAY" -> resumeMusic()
+                "com.example.carmusicplayer.ACTION_PAUSE" -> pauseMusic()
+            }
         }
         
-        // 确保前台服务一直运行，哪怕是暂停状态，只要没Stop
-        val currentMusic = getCurrentMusic()
-        if (currentMusic != null) {
-            startForeground(MusicNotificationManager.NOTIFICATION_ID, 
-                notificationManager.createNotification(currentMusic, isPlaying))
-        }
+        // 确保服务在前台，更新通知
+        updateNotification()
         
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
-    // 设置播放列表
     fun setPlaylist(list: List<Music>) {
         this.musicList = list
     }
     
-    // 获取当前播放列表
     fun getPlaylist(): List<Music> = musicList
 
-    // 播放指定位置的音乐
     fun playMusicAt(position: Int) {
         if (musicList.isEmpty() || position < 0 || position >= musicList.size) return
-        
         currentPosition = position
         playMusic(musicList[position])
     }
@@ -101,23 +124,39 @@ class MusicService : Service() {
     private fun playMusic(music: Music) {
         try {
             Log.d("MusicService", "开始播放: ${music.title}")
-            resetMediaPlayer()
+            
+            safeResetMediaPlayer()
 
             if (music.isImported) {
-                playImportedMusic(music)
+                val file = File(music.filePath)
+                if (!file.exists() || !file.canRead()) throw IOException("文件不可读")
+                mediaPlayer.setDataSource(music.filePath)
             } else {
-                playBuiltInMusic(music)
+                val player = MediaPlayer.create(this, music.resourceId) ?: throw IllegalStateException("创建失败")
+                if (::mediaPlayer.isInitialized) mediaPlayer.release()
+                mediaPlayer = player
             }
+            
+            // 如果是 create() 创建的已经 prepared 了，只有 dataSource 方式需要 prepare
+            if (music.isImported) {
+                mediaPlayer.prepare()
+            }
+            
+            setupCompletionListener()
+            mediaPlayer.start()
 
             isPlaying = true
+            updateMediaSessionState(PlaybackStateCompat.STATE_PLAYING)
             updateNotification()
             
-            // 通知UI更新
             onMusicChangeListener?.invoke(music)
             onPlayStateChangeListener?.invoke(true)
 
         } catch (e: Exception) {
             Log.e("MusicService", "播放失败", e)
+            isPlaying = false
+            updateMediaSessionState(PlaybackStateCompat.STATE_ERROR)
+            updateNotification()
         }
     }
     
@@ -133,9 +172,12 @@ class MusicService : Service() {
         playMusicAt(prevPos)
     }
 
-    private fun resetMediaPlayer() {
+    private fun safeResetMediaPlayer() {
         try {
             if (::mediaPlayer.isInitialized) {
+                if (mediaPlayer.isPlaying) {
+                    mediaPlayer.stop()
+                }
                 mediaPlayer.reset()
             } else {
                 initMediaPlayer()
@@ -145,42 +187,25 @@ class MusicService : Service() {
         }
     }
 
-    private fun playImportedMusic(music: Music) {
-        val file = File(music.filePath)
-        if (!file.exists() || !file.canRead()) throw IOException("文件不可读")
-        mediaPlayer.setDataSource(music.filePath)
-        mediaPlayer.prepare()
-        setupCompletionListener()
-        mediaPlayer.start()
-    }
-
-    private fun playBuiltInMusic(music: Music) {
-        val player = MediaPlayer.create(this, music.resourceId) ?: throw IllegalStateException("创建失败")
-        if (::mediaPlayer.isInitialized) mediaPlayer.release()
-        mediaPlayer = player
-        setupCompletionListener()
-        mediaPlayer.start()
-    }
-
     fun pauseMusic() {
         if (::mediaPlayer.isInitialized && mediaPlayer.isPlaying) {
             mediaPlayer.pause()
             isPlaying = false
+            updateMediaSessionState(PlaybackStateCompat.STATE_PAUSED)
             updateNotification()
             onPlayStateChangeListener?.invoke(false)
         }
     }
 
     fun resumeMusic() {
-        // 如果当前有音乐但没播放，尝试恢复
         if (::mediaPlayer.isInitialized && !mediaPlayer.isPlaying) {
             mediaPlayer.start()
             isPlaying = true
+            updateMediaSessionState(PlaybackStateCompat.STATE_PLAYING)
             updateNotification()
             onPlayStateChangeListener?.invoke(true)
         } else if (!isPlaying && currentPosition != -1) {
-             // 如果MediaPlayer被重置了但我们有记录，尝试重新播放
-             playMusicAt(currentPosition)
+            playMusicAt(currentPosition)
         }
     }
 
@@ -189,13 +214,33 @@ class MusicService : Service() {
             mediaPlayer.stop()
         }
         isPlaying = false
+        updateMediaSessionState(PlaybackStateCompat.STATE_STOPPED)
         stopForeground(true)
+        notificationManager.cancelAll()
+    }
+    
+    private fun updateMediaSessionState(state: Int) {
+        val playbackState = PlaybackStateCompat.Builder()
+            .setActions(
+                PlaybackStateCompat.ACTION_PLAY or
+                PlaybackStateCompat.ACTION_PAUSE or
+                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                PlaybackStateCompat.ACTION_STOP
+            )
+            .setState(state, getCurrentPosition().toLong(), 1.0f)
+            .build()
+        mediaSession.setPlaybackState(playbackState)
     }
     
     private fun updateNotification() {
         val currentMusic = getCurrentMusic()
-        if (currentMusic != null) {
+        // 无论如何都要更新通知，保持服务在前台
+        try {
+            // 注意：这里使用 updateNotification 方法，它内部调用 notify
             notificationManager.updateNotification(currentMusic, isPlaying)
+        } catch (e: Exception) {
+            Log.e("MusicService", "更新通知失败", e)
         }
     }
 
@@ -210,11 +255,10 @@ class MusicService : Service() {
         if (::mediaPlayer.isInitialized) mediaPlayer.seekTo(position)
     }
 
-    fun getCurrentPosition(): Int = if (::mediaPlayer.isInitialized) mediaPlayer.currentPosition else 0
-    fun getDuration(): Int = if (::mediaPlayer.isInitialized) mediaPlayer.duration else 0
+    fun getCurrentPosition(): Int = if (::mediaPlayer.isInitialized) try { mediaPlayer.currentPosition } catch (e: Exception) { 0 } else 0
+    fun getDuration(): Int = if (::mediaPlayer.isInitialized) try { mediaPlayer.duration } catch (e: Exception) { 0 } else 0
     fun isMusicPlaying(): Boolean = isPlaying
 
-    // 各种监听器设置
     fun setOnMusicChangeListener(listener: (Music) -> Unit) {
         this.onMusicChangeListener = listener
     }
@@ -229,7 +273,10 @@ class MusicService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (::mediaPlayer.isInitialized) mediaPlayer.release()
-        notificationManager.cancelNotification()
+        if (::mediaPlayer.isInitialized) {
+            mediaPlayer.release()
+        }
+        mediaSession.release()
+        notificationManager.cancelAll()
     }
 }
