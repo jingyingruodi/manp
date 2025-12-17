@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">车载音乐播放器</string>
+    <string name="play">播放</string>
+    <string name="pause">暂停</string>
+    <string name="next">下一首</string>
+    <string name="previous">上一首</string>
+    <string name="back">返回</string>
+    <string name="playlist">播放列表</string>
+    <string name="no_music_playing">未播放音乐</string>
+    <string name="select_song">请选择歌曲</string>
+</resources>
